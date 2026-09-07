@@ -42,11 +42,15 @@ with DAG(
     ingest_data_task = PythonOperator(
         task_id="ingest_data",
         python_callable=ingest_data,
+        do_xcom_push=False,
     )
 
     train_and_save_model_task = PythonOperator(
         task_id="train_and_save_model",
+        # do_xcom_push=False: train() retorna o Pipeline do scikit-learn, que não é
+        # serializável em JSON — o Airflow tentaria (e falharia) ao publicar isso como XCom.
         python_callable=train_and_save_model,
+        do_xcom_push=False,
     )
 
     ingest_data_task >> train_and_save_model_task

@@ -171,3 +171,59 @@ Medido localmente contra o container Docker, 200 requisições ao endpoint
 
 Esse baseline será comparado com o modelo otimizado (ex.: ONNX Runtime) na
 Etapa 4.
+
+## Etapa 2 — CI/CD e Pipeline Automatizado
+
+### Testes automatizados
+
+`tests/test_data.py` valida o mapeamento de urgência e o carregamento do CSV
+(usando um CSV temporário, sem depender do dataset completo). `tests/test_api.py`
+valida os endpoints `/health` e `/predict` com um modelo minúsculo treinado em
+memória durante o teste — assim a suíte roda rápido e não depende de baixar o
+dataset nem de ter um modelo já treinado.
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+ruff check .
+```
+
+### GitHub Actions
+
+Workflow em [`.github/workflows/ci.yml`](.github/workflows/ci.yml), disparado em
+todo `push`/`pull_request`, com dois jobs independentes:
+
+- **Lint**: `ruff check .`
+- **Testes**: `pytest -v`
+
+### DAG do Airflow
+
+DAG em [`airflow/dags/train_dag.py`](airflow/dags/train_dag.py) com duas tasks
+encadeadas:
+
+1. `ingest_data` — baixa/atualiza o dataset (`scripts/download_data.py`).
+2. `train_and_save_model` — treina o pipeline e salva o modelo (`src/ml/train.py`).
+
+Ambas as tasks usam `do_xcom_push=False`: nenhuma delas precisa repassar dado
+para a próxima via XCom, e o retorno de `train()` é um objeto `Pipeline` do
+scikit-learn, que não é serializável em JSON (o Airflow tentaria publicá-lo como
+XCom por padrão e a task falharia).
+
+Como este repositório não roda um Airflow local, a DAG foi validada com a
+imagem oficial do Airflow via Docker (útil para o desenvolvedor reproduzir):
+
+```bash
+docker run --rm -v "$(pwd):/opt/airflow/project" \
+  -e AIRFLOW_HOME=/tmp/airflow_home \
+  -e AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/project/airflow/dags \
+  -e AIRFLOW__CORE__LOAD_EXAMPLES=False \
+  apache/airflow:2.10.4-python3.11 bash -c "
+    pip install -q pandas scikit-learn joblib requests &&
+    airflow db migrate &&
+    cd /opt/airflow/project &&
+    airflow dags test triagem_laudos_train_dag 2026-01-01
+  "
+```
+
+Resultado obtido: `DagRun ... state=success` — as duas tasks rodaram e o
+modelo foi treinado e salvo com sucesso dentro do container.

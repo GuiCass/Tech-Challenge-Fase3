@@ -19,11 +19,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
+from airflow import DAG  # noqa: E402 - PROJECT_ROOT precisa entrar antes no sys.path
+from airflow.operators.python import PythonOperator  # noqa: E402
 
-from scripts.download_data import main as ingest_data
-from src.ml.train import train as train_and_save_model
+from scripts.download_data import main as ingest_data  # noqa: E402
+from src.ml.train import train as train_and_save_model  # noqa: E402
 
 default_args = {
     "owner": "triagem-laudos",

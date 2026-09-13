@@ -1,6 +1,7 @@
 import joblib
 import pytest
 from fastapi.testclient import TestClient
+from prometheus_client.parser import text_string_to_metric_families
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
@@ -52,3 +53,35 @@ def test_predict_returns_classification_and_confidence(client):
 def test_predict_rejects_empty_text(client):
     response = client.post("/predict", json={"text": ""})
     assert response.status_code == 422
+
+
+def test_metrics_exposes_request_volume_latency_and_predictions(client):
+    prediction = client.post("/predict", json={"text": "chest pain emergency"})
+    assert prediction.status_code == 200
+
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith(
+        "text/plain; version=0.0.4"
+    )
+
+    metric_names = {
+        family.name for family in text_string_to_metric_families(response.text)
+    }
+    assert "triagem_http_requests" in metric_names
+    assert "triagem_http_request_duration_seconds" in metric_names
+    assert "triagem_predictions" in metric_names
+
+    assert 'route="/predict"' in response.text
+    assert 'status_code="200"' in response.text
+    assert "triagem_http_request_duration_seconds_bucket" in response.text
+    assert "triagem_predictions_total" in response.text
+
+
+def test_metrics_does_not_count_its_own_scrapes(client):
+    first = client.get("/metrics")
+    second = client.get("/metrics")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert 'route="/metrics"' not in second.text

@@ -6,8 +6,8 @@ servido via API REST (FastAPI) em container Docker.
 
 Especificação completa do desafio em [`MLET - Tech Challenge Fase 3.pdf`](MLET%20-%20Tech%20Challenge%20Fase%203.pdf).
 
-Este README cobre as **Etapas 1 e 2** do desafio (as demais etapas — monitoramento e
-otimização de latência — ainda não foram implementadas neste repositório).
+Este README cobre as **Etapas 1, 2 e 3** do desafio. A otimização de latência da
+Etapa 4 permanece como próxima entrega.
 
 ## Etapa 1 — Decisão Arquitetural e API Inicial
 
@@ -52,8 +52,8 @@ Cliente (sistema hospitalar)
   chegada de novos dados rotulados em um bucket S3). Alternativa mais barata para
   ambientes de estudo/baixo orçamento: Airflow self-hosted em uma única instância
   EC2 ou task ECS, já que o volume de retreino aqui é baixo.
-- **Monitoramento** (Etapa 3, ainda não implementada): Prometheus + Grafana rodando
-  localmente via Docker Compose para desenvolvimento; em produção na AWS, o
+- **Monitoramento** (Etapa 3): Prometheus + Grafana rodam localmente via Docker
+  Compose para desenvolvimento; em produção na AWS, o
   equivalente seria Amazon Managed Service for Prometheus + Amazon Managed Grafana,
   ou CloudWatch Container Insights como alternativa nativa.
 
@@ -106,13 +106,18 @@ urgência é uma aproximação a partir de categoria de doença, não urgência 
 │   └── api/            # API FastAPI (schemas + endpoints)
 ├── scripts/
 │   ├── download_data.py    # baixa o dataset
-│   └── measure_latency.py  # mede latência do endpoint /predict
-├── tests/               # testes automatizados (Etapa 2)
+│   ├── measure_latency.py  # mede latência do endpoint /predict
+│   └── generate_monitoring_traffic.py # alimenta o dashboard
+├── monitoring/
+│   ├── prometheus/      # configuração de scrape
+│   └── grafana/         # datasource e dashboard provisionados
+├── tests/               # testes automatizados (Etapas 2 e 3)
 ├── .github/workflows/   # pipeline CI/CD (Etapa 2)
 ├── airflow/dags/        # DAG de treino/retreino (Etapa 2)
 ├── data/                 # dataset baixado (não versionado)
 ├── models/               # modelo treinado (não versionado)
-└── Dockerfile
+├── Dockerfile
+└── docker-compose.yml    # API + Prometheus + Grafana
 ```
 
 ## Como executar
@@ -139,6 +144,51 @@ docker run -p 8000:8000 triagem-laudos:latest
 
 > O modelo (`models/urgency_classifier.joblib`) precisa existir antes do build —
 > rode `python -m src.ml.train` localmente primeiro (ele não é versionado no git).
+
+### 3. Stack completa de observabilidade
+
+O modelo também precisa existir antes do build da stack. Depois do treino:
+
+```bash
+cp .env.example .env
+# edite GRAFANA_ADMIN_PASSWORD no arquivo .env
+
+docker compose up --build -d
+docker compose ps
+```
+
+Serviços disponíveis apenas no computador local:
+
+- API FastAPI: <http://localhost:8000>
+- métricas Prometheus: <http://localhost:8000/metrics>
+- interface Prometheus: <http://localhost:9090>
+- dashboard Grafana: <http://localhost:3000/d/triagem-api-observability>
+
+O dashboard permite visualização anônima somente como `Viewer`. Administração usa
+as credenciais definidas no `.env`. As portas estão vinculadas a `127.0.0.1` para
+que a configuração didática não fique exposta na rede por padrão.
+
+Para gerar tráfego e preencher os gráficos:
+
+```bash
+python scripts/generate_monitoring_traffic.py \
+  --url http://localhost:8000 \
+  --count 100 \
+  --interval 0.05 \
+  --invalid-every 10
+```
+
+Para encerrar a stack sem apagar o histórico local:
+
+```bash
+docker compose down
+```
+
+Para encerrar e remover também os volumes do Prometheus e Grafana:
+
+```bash
+docker compose down --volumes
+```
 
 ### Testando a API
 
@@ -227,3 +277,80 @@ docker run --rm -v "$(pwd):/opt/airflow/project" \
 
 Resultado obtido: `DagRun ... state=success` — as duas tasks rodaram e o
 modelo foi treinado e salvo com sucesso dentro do container.
+
+## Etapa 3 — Monitoramento e Observabilidade
+
+### Arquitetura local
+
+```text
+Cliente / gerador de carga
+          |
+          | POST /predict
+          v
+   FastAPI + modelo
+          |
+          | GET /metrics a cada 5 s
+          v
+      Prometheus
+          |
+          | consultas PromQL
+          v
+        Grafana
+```
+
+O `docker-compose.yml` sobe os três serviços em uma rede dedicada. A API possui
+`healthcheck`; o Prometheus só inicia a coleta depois que esse teste confirma que
+o modelo foi carregado e a API está saudável. Prometheus e Grafana usam volumes
+nomeados para preservar histórico e configuração entre reinicializações.
+
+### Métricas instrumentadas
+
+| Métrica | Tipo | Finalidade |
+|---|---|---|
+| `triagem_http_requests_total` | Counter | volume por método, rota e status HTTP |
+| `triagem_http_request_duration_seconds` | Histogram | distribuição de latência e cálculo de p95 |
+| `triagem_predictions_total` | Counter | volume de classificações por urgência |
+
+O endpoint `/metrics` não contabiliza o próprio scrape, evitando que o Prometheus
+infle artificialmente o volume de uso. As rotas são registradas pelo template do
+FastAPI (`/predict`, por exemplo), sem URLs livres que poderiam gerar cardinalidade
+ilimitada.
+
+### Dashboard Grafana
+
+O dashboard é carregado automaticamente a partir de
+[`monitoring/grafana/dashboards/triagem-api.json`](monitoring/grafana/dashboards/triagem-api.json)
+e contém cinco painéis:
+
+1. total acumulado de requisições;
+2. taxa de erro HTTP 5xx;
+3. taxa de requisições por status HTTP;
+4. latência p95 por rota;
+5. predições por classificação (`normal`, `atenção`, `urgente`).
+
+O datasource Prometheus também é provisionado como código. Portanto, não é
+necessário cadastrar a fonte ou importar o JSON manualmente.
+
+![Dashboard de observabilidade da API](monitoring/evidence/grafana-dashboard.png)
+
+### Critérios de saúde escolhidos
+
+- **Volume:** confirma se a API está recebendo o fluxo esperado de laudos.
+- **Latência p95:** evidencia degradações que a média pode esconder; o painel marca
+  atenção a partir de 250 ms e criticidade a partir de 500 ms.
+- **Taxa de erro 5xx:** mede falhas internas do serviço; atenção a partir de 1% e
+  criticidade a partir de 5% em cinco minutos.
+- **Status HTTP:** separa sucesso (`2xx`) de erros de validação (`4xx`) e falhas do
+  serviço (`5xx`).
+- **Distribuição das classificações:** ajuda a detectar mudanças inesperadas no
+  padrão de saída do modelo, embora não substitua monitoramento de drift.
+
+### Evidência de validação local
+
+Na prova local da Etapa 3, o gerador enviou 180 chamadas: 162 válidas (`200`) e
+18 lotes propositalmente inválidos (`422`). A latência média observada pelo cliente
+foi 6,54 ms, com máximo de 12,61 ms. O Prometheus reportou o alvo `triagem-api`
+como `up`, e o Grafana carregou automaticamente o datasource e os cinco painéis.
+
+Esses valores demonstram o funcionamento da stack no ambiente de teste e podem
+variar conforme hardware, carga, modelo treinado e sistema operacional.

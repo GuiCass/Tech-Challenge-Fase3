@@ -40,3 +40,27 @@ jobs:
 
       - name: Run pytest
         run: pytest -v
+
+  build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install model dependencies
+        run: pip install -r requirements.txt
+
+      - name: Train and optimize model
+        run: |
+          python scripts/download_data.py
+          python -m src.ml.train
+          python scripts/optimize_model.py
+
+      - name: Build image
+        run: docker build -t triagem-laudos:ci .

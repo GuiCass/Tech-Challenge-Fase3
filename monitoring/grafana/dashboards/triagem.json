@@ -1,0 +1,29 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "title": "Total de requisicoes",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(triagem_http_requests_total)", "refId": "A"}]
+    },
+    {
+      "title": "Latencia p95 (ms)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 0},
+      "targets": [{"expr": "1000 * histogram_quantile(0.95, sum(rate(triagem_http_request_duration_seconds_bucket[5m])) by (le))", "refId": "A"}]
+    },
+    {
+      "title": "Taxa de erros",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "targets": [{"expr": "sum(rate(triagem_http_requests_total{status=~\"5..\"}[5m]))", "refId": "A"}]
+    }
+  ],
+  "schemaVersion": 39,
+  "title": "Triagem de Laudos",
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "version": 1
+}

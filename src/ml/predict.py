@@ -1,6 +1,7 @@
 """Carrega o modelo treinado e expõe a função de predição usada pela API."""
 
 from functools import lru_cache
+import os
 
 import joblib
 
@@ -17,6 +18,11 @@ def load_model():
 
 
 def predict_urgency(text: str) -> tuple[str, float]:
+    if os.getenv("MODEL_BACKEND", "sklearn").lower() == "onnx":
+        from src.ml.predict_onnx import predict_urgency_onnx
+
+        return predict_urgency_onnx(text)
+
     model = load_model()
     label = model.predict([text])[0]
     proba = model.predict_proba([text])[0]

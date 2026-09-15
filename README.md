@@ -6,8 +6,8 @@ servido via API REST (FastAPI) em container Docker.
 
 Especificação completa do desafio em [`MLET - Tech Challenge Fase 3.pdf`](MLET%20-%20Tech%20Challenge%20Fase%203.pdf).
 
-Este README cobre as **Etapas 1 e 2** do desafio (as demais etapas — monitoramento e
-otimização de latência — ainda não foram implementadas neste repositório).
+Este README cobre as quatro etapas técnicas do desafio. A gravação do vídeo STAR é
+um entregável externo ao código e deve ser feita pela equipe.
 
 ## Etapa 1 — Decisão Arquitetural e API Inicial
 
@@ -106,10 +106,14 @@ urgência é uma aproximação a partir de categoria de doença, não urgência 
 │   └── api/            # API FastAPI (schemas + endpoints)
 ├── scripts/
 │   ├── download_data.py    # baixa o dataset
-│   └── measure_latency.py  # mede latência do endpoint /predict
+│   ├── measure_latency.py   # mede latência do endpoint /predict
+│   ├── optimize_model.py   # exporta o modelo para ONNX
+│   └── compare_latency.py  # compara scikit-learn e ONNX Runtime
 ├── tests/               # testes automatizados (Etapa 2)
 ├── .github/workflows/   # pipeline CI/CD (Etapa 2)
 ├── airflow/dags/        # DAG de treino/retreino (Etapa 2)
+├── monitoring/           # Prometheus e dashboard provisionado do Grafana
+├── docker-compose.yml    # API + Prometheus + Grafana (Etapa 3)
 ├── data/                 # dataset baixado (não versionado)
 ├── models/               # modelo treinado (não versionado)
 └── Dockerfile
@@ -126,6 +130,7 @@ pip install -r requirements.txt
 
 python scripts/download_data.py   # baixa o dataset para data/
 python -m src.ml.train             # treina o modelo e salva em models/
+python scripts/optimize_model.py   # gera models/urgency_classifier.onnx
 
 uvicorn src.api.main:app --reload --port 8000
 ```
@@ -138,7 +143,26 @@ docker run -p 8000:8000 triagem-laudos:latest
 ```
 
 > O modelo (`models/urgency_classifier.joblib`) precisa existir antes do build —
-> rode `python -m src.ml.train` localmente primeiro (ele não é versionado no git).
+> rode `python -m src.ml.train` e `python scripts/optimize_model.py` antes (os
+> artefatos de modelo não são versionados no git).
+
+### 3. Stack de monitoramento
+
+Depois de baixar, treinar e otimizar o modelo, suba a stack completa:
+
+```bash
+docker compose up --build
+```
+
+Serviços disponíveis:
+
+- API: `http://localhost:8000` e métricas em `http://localhost:8000/metrics`
+- Prometheus: `http://localhost:9090`
+- Grafana: `http://localhost:3000` (usuário e senha padrão: `admin`)
+
+O dashboard `Triagem de Laudos` é provisionado automaticamente e contém painéis
+de total de requisições, latência p95 e taxa de erros. Para gerar dados no painel,
+execute algumas chamadas ao endpoint `/predict` enquanto a stack estiver rodando.
 
 ### Testando a API
 
@@ -227,3 +251,31 @@ docker run --rm -v "$(pwd):/opt/airflow/project" \
 
 Resultado obtido: `DagRun ... state=success` — as duas tasks rodaram e o
 modelo foi treinado e salvo com sucesso dentro do container.
+
+## Etapa 3 — Monitoramento e Observabilidade
+
+A API expõe métricas com `prometheus-client` no endpoint `/metrics`. O middleware
+registra contagem por método, rota e status HTTP, além da duração das requisições.
+O arquivo `docker-compose.yml` conecta a API ao Prometheus e ao Grafana, e o
+dashboard versionado em `monitoring/grafana/dashboards/triagem.json` possui os
+três painéis exigidos.
+
+## Etapa 4 — Otimização de Latência
+
+O pipeline treinado em scikit-learn pode ser exportado para ONNX com:
+
+```bash
+python scripts/optimize_model.py
+python scripts/compare_latency.py
+```
+
+O script compara a média de 200 inferências entre scikit-learn e ONNX Runtime e
+imprime a melhoria observada. A API local usa scikit-learn por padrão; a stack
+do Compose usa `MODEL_BACKEND=onnx` para executar o modelo otimizado.
+
+Medição reproduzida neste ambiente: scikit-learn `0,518 ms`, ONNX Runtime
+`0,082 ms`, melhoria de `84,10%` na média por inferência.
+
+Como a latência depende da máquina e do ambiente, os números devem ser medidos
+novamente durante a apresentação. O baseline documentado acima é histórico e
+não substitui a medição reproduzida na entrega.

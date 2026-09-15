@@ -8,6 +8,7 @@ env/
 
 data/*.csv
 models/*.joblib
+models/*.onnx
 
 .env
 *.egg-info/
